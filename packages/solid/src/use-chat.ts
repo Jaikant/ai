@@ -129,6 +129,7 @@ const processStreamedResponse = async (
   fetch: FetchFunction | undefined,
   keepLastMessageOnError: boolean,
   chatId: string,
+  experimental_prepareRequestBody: UseChatOptions['experimental_prepareRequestBody'] 
 ) => {
   // Do an optimistic update to the chat state to show the updated messages
   // immediately.
@@ -162,7 +163,12 @@ const processStreamedResponse = async (
 
   return await callChatApi({
     api,
-    body: {
+    body: experimental_prepareRequestBody?.({
+      id: chatId,
+      messages: chatRequest.messages,
+      requestData: chatRequest.data,
+      requestBody: chatRequest.body,
+    }) ?? {
       id: chatId,
       messages: constructedMessagesPayload,
       data: chatRequest.data,
@@ -199,6 +205,23 @@ const chatCache = new ReactiveLRU<string, Message[]>();
 
 export type UseChatOptions = SharedUseChatOptions & {
   /**
+   * Experimental (SolidJS only). When a function is provided, it will be used
+   * to prepare the request body for the chat API. This can be useful for
+   * customizing the request body based on the messages and data in the chat.
+   *
+   * @param id The chat ID
+   * @param messages The current messages in the chat
+   * @param requestData The data object passed in the chat request
+   * @param requestBody The request body object passed in the chat request
+   */
+    experimental_prepareRequestBody?: (options: {
+      id: string;
+      messages: Message[];
+      requestData?: JSONValue;
+      requestBody?: object;
+    }) => unknown;
+  
+  /**
 Maximum number of sequential LLM calls (steps), e.g. when you use tool calls. Must be at least 1.
 
 A maximum number is required to prevent infinite loops in the case of misconfigured tools.
@@ -211,9 +234,16 @@ By default, it's set to 1, which means that only a single LLM call is made.
 export function useChat(
   rawUseChatOptions: UseChatOptions | Accessor<UseChatOptions> = {},
 ): UseChatHelpers {
-  const useChatOptions = createMemo(() =>
-    convertToAccessorOptions(rawUseChatOptions),
-  );
+
+  const useChatOptions = createMemo(() => ({
+    ...convertToAccessorOptions(rawUseChatOptions),
+    // avoid awkward double invocation syntax so add it here.
+    experimental_prepareRequestBody: () => {
+      const options = convertToAccessorOptions(rawUseChatOptions);
+      return options.experimental_prepareRequestBody?.();
+    }
+  }));
+
 
   const api = createMemo(() => useChatOptions().api?.() ?? '/api/chat');
   const generateId = createMemo(
@@ -289,6 +319,7 @@ export function useChat(
         useChatOptions().fetch?.(),
         useChatOptions().keepLastMessageOnError?.() ?? true,
         chatId(),
+        useChatOptions().experimental_prepareRequestBody?.()
       );
 
       abortController = null;
